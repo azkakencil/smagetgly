@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePlayerStore } from '@/lib/store';
 import { db } from '@/lib/db';
-import YouTube from 'react-youtube';
 import { motion, AnimatePresence, PanInfo } from 'motion/react';
 import { 
   Play, 
@@ -74,7 +73,6 @@ export function Player() {
   
   const playerRef = useRef<any>(null);
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
-  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
   
   useEffect(() => {
     setActiveVideoId(currentTrack?.videoId || null);
@@ -93,7 +91,7 @@ export function Player() {
       const diff = Math.max(0, sleepTimerTarget - now);
       if (diff <= 0) {
         setPlaying(false);
-        if (playerRef.current) playerRef.current.pauseVideo();
+        if (playerRef.current) playerRef.current.pause();
         clearSleepTimer();
         setSleepTimerRemaining(null);
       } else {
@@ -107,19 +105,6 @@ export function Player() {
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
   }, [sleepTimerTarget, setPlaying, clearSleepTimer]);
-
-  // Background Audio Keeper Engine: Keep HTML5 audio playing to maintain Audio Focus in mobile background
-  useEffect(() => {
-    if (silentAudioRef.current) {
-      if (isPlaying && backgroundPlayEnabled) {
-        silentAudioRef.current.play().catch(() => {
-          // Handled if user has not interacted yet
-        });
-      } else {
-        silentAudioRef.current.pause();
-      }
-    }
-  }, [isPlaying, backgroundPlayEnabled]);
 
   // Smooth scroll lyrics
   useEffect(() => {
@@ -193,116 +178,77 @@ export function Player() {
     }
   }, [currentTrack, isLiked]);
 
-  const onReady = useCallback(async (event: any) => {
-    try {
-      playerRef.current = event.target;
-      const dur = await event.target.getDuration();
-      setDuration(dur || 0);
-      if (volume !== undefined && typeof event.target.setVolume === 'function') {
-        event.target.setVolume(volume);
-      }
-    } catch (err) {
-      console.warn("onReady error:", err);
-    }
-  }, [setDuration, volume]);
+  // Native HTML5 audio events. Unlike a YouTube iframe, the audio element is a
+  // real media session and can continue while Chrome is backgrounded/locked.
+  const handleAudioLoaded = useCallback(() => {
+    const audio = playerRef.current as HTMLAudioElement | null;
+    if (!audio) return;
+    setDuration(Number.isFinite(audio.duration) ? audio.duration : (currentTrack?.duration || 0));
+    audio.volume = Math.max(0, Math.min(1, volume / 100));
+  }, [setDuration, volume, currentTrack?.duration]);
 
-  const onStateChange = useCallback(async (event: any) => {
-    try {
-      if (event.data === YouTube.PlayerState.PLAYING) {
-        setPlaying(true);
-        const dur = await event.target.getDuration();
-        setDuration(dur || 0);
-      } else if (event.data === YouTube.PlayerState.PAUSED) {
-        const state = usePlayerStore.getState();
-        // If paused unexpectedly while user wants it playing and background play is enabled
-        if (state.isPlaying && state.backgroundPlayEnabled && document.visibilityState === 'hidden') {
-          setTimeout(() => {
-            try {
-              event.target.playVideo();
-            } catch {
-              // ignore
-            }
-          }, 150);
-        } else {
-          setPlaying(false);
-        }
-      } else if (event.data === YouTube.PlayerState.ENDED) {
-        const state = usePlayerStore.getState();
-        if (state.sleepTimerEndOfTrack) {
-          state.setPlaying(false);
-          state.clearSleepTimer();
-          return;
-        }
-        if (state.repeatMode === 'one') {
-          try {
-            event.target.seekTo(0);
-            event.target.playVideo();
-          } catch {
-            // ignore
-          }
-        } else {
-          playNext();
-        }
-      }
-    } catch (err) {
-      console.warn("onStateChange error:", err);
-    }
-  }, [setPlaying, setDuration, playNext]);
+  const handleAudioPlay = useCallback(() => {
+    setPlaying(true);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+  }, [setPlaying]);
 
-  const onError = useCallback(async (event: any) => {
-    const error = event.data;
-    console.warn("YouTube Player Error:", error);
-    
-    if ((error === 101 || error === 150 || error === 100) && currentTrack && !isAlternativeTrying) {
-      setIsAlternativeTrying(true);
-      
-      try {
-        const artistName = Array.isArray(currentTrack.artist) ? currentTrack.artist.map(a => a.name).join(' ') : currentTrack.artist?.name || '';
-        const query = `${currentTrack.name} ${artistName} audio`;
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=video`);
-        if (res.ok) {
-          const videos = await res.json();
-          const alternativeVideo = videos.find((v: any) => v.videoId && v.videoId !== currentTrack.videoId);
-          if (alternativeVideo) {
-            setActiveVideoId(alternativeVideo.videoId);
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to find alternative video", err);
-      }
-    }
-    
-    playNext();
-  }, [currentTrack, isAlternativeTrying, playNext]);
+  const handleAudioPause = useCallback(() => {
+    setPlaying(false);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+  }, [setPlaying]);
 
-  // Background playback + lock-screen controls.
-  // The YouTube iframe remains the actual audio source; Media Session exposes
-  // controls on the lock screen / notification shade where the browser supports it.
+  const handleAudioEnded = useCallback(() => {
+    const state = usePlayerStore.getState();
+    if (state.sleepTimerEndOfTrack) {
+      state.setPlaying(false);
+      state.clearSleepTimer();
+      return;
+    }
+    if (state.repeatMode === 'one') {
+      const audio = playerRef.current as HTMLAudioElement | null;
+      if (audio) { audio.currentTime = 0; audio.play().catch(() => {}); }
+    } else {
+      playNext();
+    }
+  }, [playNext]);
+
+  // Load each track into the native audio element.
+  useEffect(() => {
+    const audio = playerRef.current as HTMLAudioElement | null;
+    if (!audio || !currentTrack) return;
+    const src = `/api/audio?id=${encodeURIComponent(currentTrack.videoId)}`;
+    if (audio.src !== new URL(src, window.location.href).href) {
+      audio.src = src;
+      audio.load();
+    }
+    if (isPlaying) audio.play().catch(() => setPlaying(false));
+  }, [currentTrack?.videoId]);
+
+  // Media Session controls are attached to the native audio element.
   useEffect(() => {
     if (!currentTrack || !('mediaSession' in navigator)) return;
 
     const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
       ['play', () => {
-        try { playerRef.current?.playVideo?.(); } catch {}
+        try { playerRef.current?.play?.(); } catch {}
         setPlaying(true);
       }],
       ['pause', () => {
-        try { playerRef.current?.pauseVideo?.(); } catch {}
+        try { playerRef.current?.pause?.(); } catch {}
         setPlaying(false);
       }],
       ['nexttrack', () => { playNext(); }],
       ['previoustrack', () => { playPrev(); }],
       ['seekbackward', (details) => {
         try {
-          const current = playerRef.current?.getCurrentTime?.() ?? progress;
-          playerRef.current?.seekTo?.(Math.max(0, current - (details.seekOffset || 10)), true);
+          const current = playerRef.current?.currentTime ?? progress;
+          playerRef.current.currentTime = Math.max(0, current - (details.seekOffset || 10));
         } catch {}
       }],
       ['seekforward', (details) => {
         try {
-          const current = playerRef.current?.getCurrentTime?.() ?? progress;
-          playerRef.current?.seekTo?.(Math.min(duration, current + (details.seekOffset || 10)), true);
+          const current = playerRef.current?.currentTime ?? progress;
+          playerRef.current.currentTime = Math.min(duration, current + (details.seekOffset || 10));
         } catch {}
       }],
     ];
@@ -318,31 +264,14 @@ export function Player() {
     };
   }, [currentTrack?.videoId, duration, progress, playNext, playPrev, setPlaying]);
 
-  // When the page becomes hidden, immediately ask the embedded player to keep
-  // playing. This helps browsers that momentarily pause an iframe during
-  // tab/app switching. OS/browser policies can still override background audio.
-  useEffect(() => {
-    const handleVisibility = () => {
-      const state = usePlayerStore.getState();
-      if (document.visibilityState === 'hidden' && state.isPlaying && state.backgroundPlayEnabled) {
-        setTimeout(() => {
-          try { playerRef.current?.playVideo?.(); } catch {}
-        }, 100);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, []);
-
   // Progress polling
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (isPlaying) {
       interval = setInterval(async () => {
         try {
-          if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-            const time = await playerRef.current.getCurrentTime();
+          if (playerRef.current) {
+            const time = playerRef.current.currentTime;
             setProgress(time || 0);
 
             if ('mediaSession' in navigator && duration > 0) {
@@ -384,11 +313,11 @@ export function Player() {
 
       navigator.mediaSession.setActionHandler('play', () => {
         setPlaying(true);
-        if (playerRef.current) playerRef.current.playVideo();
+        if (playerRef.current) playerRef.current.play();
       });
       navigator.mediaSession.setActionHandler('pause', () => {
         setPlaying(false);
-        if (playerRef.current) playerRef.current.pauseVideo();
+        if (playerRef.current) playerRef.current.pause();
       });
       navigator.mediaSession.setActionHandler('previoustrack', () => {
         playPrev();
@@ -399,7 +328,7 @@ export function Player() {
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (details.seekTime !== undefined && playerRef.current) {
           setProgress(details.seekTime);
-          playerRef.current.seekTo(details.seekTime, true);
+          playerRef.current.currentTime = details.seekTime;
         }
       });
       navigator.mediaSession.setActionHandler('seekforward', (details) => {
@@ -407,7 +336,7 @@ export function Player() {
           const skipTime = details.seekOffset || 10;
           const newTime = Math.min(progress + skipTime, duration);
           setProgress(newTime);
-          playerRef.current.seekTo(newTime, true);
+          playerRef.current.currentTime = newTime;
         }
       });
       navigator.mediaSession.setActionHandler('seekbackward', (details) => {
@@ -415,12 +344,12 @@ export function Player() {
           const skipTime = details.seekOffset || 10;
           const newTime = Math.max(progress - skipTime, 0);
           setProgress(newTime);
-          playerRef.current.seekTo(newTime, true);
+          playerRef.current.currentTime = newTime;
         }
       });
       navigator.mediaSession.setActionHandler('stop', () => {
         setPlaying(false);
-        if (playerRef.current) playerRef.current.pauseVideo();
+        if (playerRef.current) playerRef.current.pause();
       });
     }
   }, [currentTrack, setPlaying, playNext, playPrev, setProgress, progress, duration]);
@@ -429,12 +358,12 @@ export function Player() {
   useEffect(() => {
     if (playerRef.current) {
       if (isPlaying) {
-        playerRef.current.playVideo();
+        playerRef.current.play().catch(() => setPlaying(false));
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'playing';
         }
       } else {
-        playerRef.current.pauseVideo();
+        playerRef.current.pause();
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = 'paused';
         }
@@ -442,42 +371,10 @@ export function Player() {
     }
   }, [isPlaying]);
 
-  // Background playback & Page Visibility Management
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      const state = usePlayerStore.getState();
-      if (document.visibilityState === 'hidden') {
-        if (!state.backgroundPlayEnabled && playerRef.current && state.isPlaying) {
-          playerRef.current.pauseVideo();
-        } else if (state.backgroundPlayEnabled && state.isPlaying && playerRef.current) {
-          // Re-assert playVideo to prevent background pause
-          setTimeout(() => {
-            try {
-              if (playerRef.current) playerRef.current.playVideo();
-            } catch {
-              // ignore
-            }
-          }, 100);
-        }
-      } else if (document.visibilityState === 'visible') {
-        if (state.isPlaying && playerRef.current) {
-          try {
-            playerRef.current.playVideo();
-          } catch {
-            // ignore
-          }
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
-
   const handleSeek = (newTime: number) => {
     setProgress(newTime);
     if (playerRef.current) {
-      playerRef.current.seekTo(newTime, true);
+      playerRef.current.currentTime = newTime;
     }
   };
 
@@ -485,7 +382,7 @@ export function Player() {
     const newVol = Number(e.target.value);
     setVolume(newVol);
     if (playerRef.current) {
-      playerRef.current.setVolume(newVol);
+      playerRef.current.volume = newVol / 100;
     }
   };
 
@@ -502,36 +399,19 @@ export function Player() {
 
   return (
     <>
-      {/* Silent Audio Keeper (Keeps Audio Focus alive when backgrounded) */}
+      {/* Native audio element: this is the actual media source.
+          It participates in Android/iOS media controls and background playback. */}
       <audio
-        ref={silentAudioRef}
-        src={SILENT_AUDIO_URI}
-        loop
+        ref={playerRef}
+        preload="metadata"
         playsInline
-        className="hidden"
+        className="fixed h-px w-px opacity-0 pointer-events-none"
+        onLoadedMetadata={handleAudioLoaded}
+        onDurationChange={handleAudioLoaded}
+        onPlay={handleAudioPlay}
+        onPause={handleAudioPause}
+        onEnded={handleAudioEnded}
       />
-
-      {/* Embedded YouTube Player (Positioned inside viewport so browser doesn't throttle it) */}
-      <div className="fixed bottom-0 right-0 w-px h-px pointer-events-none opacity-0 overflow-hidden z-0">
-        {activeVideoId && (
-          <YouTube
-            videoId={activeVideoId}
-            opts={{
-              height: '1',
-              width: '1',
-              playerVars: {
-                autoplay: 1,
-                controls: 0,
-                playsinline: 1,
-                origin: typeof window !== 'undefined' ? window.location.origin : 'https://www.youtube.com',
-              },
-            }}
-            onReady={onReady}
-            onStateChange={onStateChange}
-            onError={onError}
-          />
-        )}
-      </div>
 
       {/* Mini Player (Floating Liquid Glass Pill above Metrolist full-width bottom nav) */}
       <AnimatePresence>
