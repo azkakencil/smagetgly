@@ -276,6 +276,65 @@ export function Player() {
     playNext();
   }, [currentTrack, isAlternativeTrying, playNext]);
 
+  // Background playback + lock-screen controls.
+  // The YouTube iframe remains the actual audio source; Media Session exposes
+  // controls on the lock screen / notification shade where the browser supports it.
+  useEffect(() => {
+    if (!currentTrack || !('mediaSession' in navigator)) return;
+
+    const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      ['play', () => {
+        try { playerRef.current?.playVideo?.(); } catch {}
+        setPlaying(true);
+      }],
+      ['pause', () => {
+        try { playerRef.current?.pauseVideo?.(); } catch {}
+        setPlaying(false);
+      }],
+      ['nexttrack', () => { playNext(); }],
+      ['previoustrack', () => { playPrev(); }],
+      ['seekbackward', (details) => {
+        try {
+          const current = playerRef.current?.getCurrentTime?.() ?? progress;
+          playerRef.current?.seekTo?.(Math.max(0, current - (details.seekOffset || 10)), true);
+        } catch {}
+      }],
+      ['seekforward', (details) => {
+        try {
+          const current = playerRef.current?.getCurrentTime?.() ?? progress;
+          playerRef.current?.seekTo?.(Math.min(duration, current + (details.seekOffset || 10)), true);
+        } catch {}
+      }],
+    ];
+
+    for (const [action, handler] of actions) {
+      try { navigator.mediaSession.setActionHandler(action, handler); } catch {}
+    }
+
+    return () => {
+      for (const [action] of actions) {
+        try { navigator.mediaSession.setActionHandler(action, null); } catch {}
+      }
+    };
+  }, [currentTrack?.videoId, duration, progress, playNext, playPrev, setPlaying]);
+
+  // When the page becomes hidden, immediately ask the embedded player to keep
+  // playing. This helps browsers that momentarily pause an iframe during
+  // tab/app switching. OS/browser policies can still override background audio.
+  useEffect(() => {
+    const handleVisibility = () => {
+      const state = usePlayerStore.getState();
+      if (document.visibilityState === 'hidden' && state.isPlaying && state.backgroundPlayEnabled) {
+        setTimeout(() => {
+          try { playerRef.current?.playVideo?.(); } catch {}
+        }, 100);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
+
   // Progress polling
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -453,7 +512,7 @@ export function Player() {
       />
 
       {/* Embedded YouTube Player (Positioned inside viewport so browser doesn't throttle it) */}
-      <div className="fixed bottom-2 right-2 w-1 h-1 pointer-events-none opacity-[0.01] overflow-hidden z-[-10]">
+      <div className="fixed bottom-0 right-0 w-px h-px pointer-events-none opacity-0 overflow-hidden z-0">
         {activeVideoId && (
           <YouTube
             videoId={activeVideoId}
