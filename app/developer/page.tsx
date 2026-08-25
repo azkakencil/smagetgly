@@ -153,7 +153,7 @@ export default function DeveloperPage() {
               <div className="relative w-full h-full rounded-[50%_50%_40%_60%_/_60%_40%_50%_50%] overflow-hidden border-2 border-[#81B29A]/30 z-10 shadow-2xl">
                 <Image 
                   src="https://f.top4top.io/p_3733w0g4e0.jpg" 
-                  alt="SMARTGADGET" 
+                  alt="SANN404 FORUM" 
                   fill 
                   sizes="160px"
                   className="object-cover"
@@ -162,7 +162,7 @@ export default function DeveloperPage() {
             </div>
 
             <div className="flex items-center justify-center gap-2">
-              <h2 className="text-2xl font-bold text-white">SMARTGADGET</h2>
+              <h2 className="text-2xl font-bold text-white">SANN404 FORUM</h2>
               <CheckCircle2 className="w-5 h-5 text-blue-400 fill-blue-400/20" />
             </div>
 
@@ -176,7 +176,7 @@ export default function DeveloperPage() {
                 <Globe className="w-5 h-5 text-white/80 group-hover:text-white transition-colors" />
                 <span className="text-[10px] text-white/70 font-medium">Website</span>
               </a>
-              <a href="https://whatsapp.com/channel/0029VbCPMfc42DccPPiWeP07" target="_blank" rel="noopener noreferrer" className="flex flex-col items-center justify-center gap-2 liquid-glass-subtle hover:bg-white/10 p-3.5 rounded-2xl transition-all group">
+              <a href="https://whatsapp.com/channel/0029Vb6ukqnHQbS4mKP0j80L" target="_blank" rel="noopener noreferrer" className="flex flex-col items-center justify-center gap-2 liquid-glass-subtle hover:bg-white/10 p-3.5 rounded-2xl transition-all group">
                 <Tv className="w-5 h-5 text-[#81B29A] group-hover:scale-110 transition-transform" />
                 <span className="text-[10px] text-white/70 font-medium">Saluran</span>
               </a>
@@ -190,9 +190,9 @@ export default function DeveloperPage() {
               </a>
             </div>
 
-            {/* Donation To developers */}
+            {/* Buy me a coffee */}
             <a 
-              href="https://saweria.co/smartgadget"
+              href="https://saweria.co/sannnforums"
               target="_blank"
               rel="noopener noreferrer"
               className="w-full flex items-center gap-4 liquid-glass hover:bg-white/10 p-4 rounded-3xl transition-all group border border-white/10 shadow-lg"
@@ -202,7 +202,7 @@ export default function DeveloperPage() {
               </div>
               <div className="text-left flex-1 min-w-0">
                 <div className="text-white font-bold text-sm">Like what I do?</div>
-                <div className="text-white/60 text-xs">Donation to Developer/ Dukung Pengembang</div>
+                <div className="text-white/60 text-xs">Buy me a coffee / Dukung Pengembang</div>
               </div>
             </a>
 
